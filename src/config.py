@@ -19,7 +19,16 @@ PORT = int(os.environ.get("P2P_PORT", MINHA_PORTA))
 DELIMITER = '\n'
 HEARTBEAT_INTERVAL = int(os.environ.get("P2P_HEARTBEAT_INTERVAL", 5))
 
-SERVER_UUID = os.environ.get("P2P_SERVER_UUID", "Master_Local")
+# =====================================================================
+# SPRINT 4 - IDENTIFICADORES DO SEU NÓ NO DASHBOARD
+# =====================================================================
+# ATENÇÃO: Troque "MeuGrupo_1" pelo identificador combinado com seu grupo!
+# Esse é o nome que vai aparecer no dashboard do professor em:
+# https://nuted-ia.dev/supervisor/dashboard/
+#
+# Exemplos: "turmaA_grupo3", "equipe_joao", "farm_node1"
+# =====================================================================
+SERVER_UUID = os.environ.get("P2P_SERVER_UUID", "Grupo_5")
 WORKER_UUID = os.environ.get("P2P_WORKER_UUID", "Worker_Local")
 
 CAPACITY = 10
