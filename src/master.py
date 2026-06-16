@@ -11,41 +11,24 @@ from processor import processar_requisicao_worker, parse_mensagem, FILA_TAREFAS,
 import config
 import processor
 
-# =====================================================================
-# State tracking (thread-safe)
-# =====================================================================
-WORKERS_ATIVOS = {}            # maps worker_id -> addr (connection client address)
-LENT_WORKERS = {}              # maps worker_id -> borrower_master_id
-BORROWED_WORKERS = {}          # maps worker_id -> original_master_address
-PENDING_WORKER_COMMANDS = {}   # maps worker_id -> pending command dict
-BORROWED_WORKER_TASKS = {}     # tracks tasks executed per borrowed worker
+WORKERS_ATIVOS = {}            
+LENT_WORKERS = {}              
+BORROWED_WORKERS = {}          
+PENDING_WORKER_COMMANDS = {}   
+BORROWED_WORKER_TASKS = {}     
 
-# =====================================================================
-# Sprint 4 - Contadores globais de tarefas
-# =====================================================================
 TASKS_COMPLETED = 0
 TASKS_FAILED = 0
 _tasks_lock = threading.Lock()
 
-# Timestamp de inicio do processo (para uptime alternativo caso psutil falhe)
 _start_time = time.time()
-
 _lock = threading.Lock()
 
-# =====================================================================
-# Supervisor config (Sprint 4)
-# =====================================================================
 SUPERVISOR_HOST = "nuted-ia.dev"
 SUPERVISOR_PORT = 443
-SUPERVISOR_INTERVAL = 10  # segundos
-
-
-# =====================================================================
-# Helpers
-# =====================================================================
+SUPERVISOR_INTERVAL = 10  
 
 def log_estado_workers():
-    """Exibe contadores de workers a cada mudanca de estado."""
     locais = [w for w in WORKERS_ATIVOS if w not in BORROWED_WORKERS and w not in LENT_WORKERS]
     config.logger.info(
         f"[ESTADO] Workers Locais: {len(locais)} | "
@@ -54,14 +37,7 @@ def log_estado_workers():
         f"Total Ativos: {len(WORKERS_ATIVOS)}"
     )
 
-
-# =====================================================================
-# Sprint 4 - Envio de métricas ao supervisor
-# =====================================================================
-
 def construir_payload_metricas():
-    """Coleta dados do sistema e do estado interno e monta o payload da Sprint 4."""
-    # --- Dados do sistema operacional ---
     try:
         uptime_seconds = int(time.time() - psutil.boot_time())
     except Exception:
@@ -96,11 +72,10 @@ def construir_payload_metricas():
     except Exception:
         disk_total_gb, disk_free_gb, disk_percent = 0.0, 0.0, 0.0
 
-    # --- Estado interno do Master (com locks) ---
     with _lock:
         workers_total        = len(WORKERS_ATIVOS)
-        workers_borrowed_out = len(LENT_WORKERS)    # emprestamos para outros Masters
-        workers_borrowed_in  = len(BORROWED_WORKERS) # recebemos de outros Masters
+        workers_borrowed_out = len(LENT_WORKERS)    
+        workers_borrowed_in  = len(BORROWED_WORKERS) 
         workers_home         = workers_total - workers_borrowed_in
 
         borrowed_list = (
@@ -135,7 +110,7 @@ def construir_payload_metricas():
 
     payload = {
         "server_uuid":     config.SERVER_UUID,
-        "hostname":        f"{config.SERVER_UUID}.farm.local",
+        "hostname":        f"{config.SERVER_UUID}.local",
         "role":            "master",
         "task":            "performance_report",
         "timestamp":       now_iso,
@@ -165,7 +140,7 @@ def construir_payload_metricas():
             },
             "farm_state": {
                 "workers": {
-                    "total_registered":        workers_total,
+                    "total_registered":           workers_total,
                     "workers_utilization":     tasks_running,
                     "workers_alive":           workers_total,
                     "workers_idle":            workers_idle,
@@ -195,10 +170,7 @@ def construir_payload_metricas():
     }
     return payload
 
-
 def enviar_metricas_supervisor():
-    """Thread que envia relatório de performance ao supervisor a cada SUPERVISOR_INTERVAL segundos."""
-    # Aquece o psutil para a primeira leitura de CPU ser precisa
     try:
         psutil.cpu_percent(interval=None)
     except Exception:
@@ -216,7 +188,6 @@ def enviar_metricas_supervisor():
             with socket.create_connection((SUPERVISOR_HOST, SUPERVISOR_PORT), timeout=8) as raw_sock:
                 with context.wrap_socket(raw_sock, server_hostname=SUPERVISOR_HOST) as tls_sock:
                     tls_sock.sendall(dados)
-            # NÃO fazemos recv - conforme especificação da Sprint 4
 
             config.logger.info(
                 f"[Sprint4] Métricas enviadas | tasks_pending={payload['performance']['farm_state']['tasks']['tasks_pending']} | "
@@ -232,11 +203,6 @@ def enviar_metricas_supervisor():
             config.logger.warning(f"[Sprint4] Supervisor recusou conexão. Tentará novamente em {SUPERVISOR_INTERVAL}s")
         except Exception as e:
             config.logger.warning(f"[Sprint4] Falha ao enviar métricas: {e}")
-
-
-# =====================================================================
-# Handler de clientes (Workers e Masters vizinhos)
-# =====================================================================
 
 def handle_client(conn, addr):
     with conn:
@@ -256,9 +222,6 @@ def handle_client(conn, addr):
                         if not msg:
                             continue
 
-                        # --------------------------------------------------
-                        # 1. request_help  (vizinho pede workers emprestados)
-                        # --------------------------------------------------
                         if msg.get("type") == "request_help":
                             payload = msg.get("payload", {})
                             if not validar_campos_obrigatorios(payload, CAMPOS_OBRIGATORIOS["request_help"], "request_help"):
@@ -280,70 +243,67 @@ def handle_client(conn, addr):
                                 with fila_lock:
                                     carga_local = len(FILA_TAREFAS)
 
-                                if carga_local >= config.SATURATION_THRESHOLD:
-                                    reason = "high_load"
-                                elif not workers_disponiveis:
-                                    reason = "no_workers_available"
-                                else:
-                                    reason = None
+                            if carga_local >= config.SATURATION_THRESHOLD:
+                                reason = "high_load"
+                            elif not workers_disponiveis:
+                                reason = "no_workers_available"
+                            else:
+                                reason = None
 
-                                if reason:
-                                    resposta = {
-                                        "type":       "response_rejected",
-                                        "request_id": request_id,
-                                        "payload":    {"reason": reason}
+                            if reason:
+                                resposta = {
+                                    "type":       "response_rejected",
+                                    "request_id": request_id,
+                                    "payload":    {"reason": reason}
+                                }
+                                config.logger.info(
+                                    f"[P2P][SEND] type=response_rejected | request_id={request_id} | "
+                                    f"Recusamos o pedido de {master_solicitante_id}. Motivo: {reason}"
+                                )
+                                conn.sendall((json.dumps(resposta) + config.DELIMITER).encode())
+                            else:
+                                workers_a_emprestar = workers_disponiveis[:min(workers_needed, len(workers_disponiveis))]
+
+                                master_solicitante_address = None
+                                for neighbor in config.NEIGHBORS:
+                                    if neighbor.get("id") == master_solicitante_id:
+                                        master_solicitante_address = f"{neighbor['host']}:{neighbor['port']}"
+                                        break
+                                if not master_solicitante_address:
+                                    master_solicitante_address = f"{addr[0]}:{config.PORT}"
+
+                                resposta = {
+                                    "type":       "response_accepted",
+                                    "request_id": request_id,
+                                    "payload": {
+                                        "workers_offered": len(workers_a_emprestar),
+                                        "worker_details": [
+                                            {"id": wid, "address": f"{config.HOST}:{config.PORT}"}
+                                            for wid in workers_a_emprestar
+                                        ]
+                                    }
+                                }
+                                config.logger.info(
+                                    f"[P2P][SEND] type=response_accepted | request_id={request_id} | "
+                                    f"Emprestando {workers_a_emprestar}"
+                                )
+                                conn.sendall((json.dumps(resposta) + config.DELIMITER).encode())
+
+                                for wid in workers_a_emprestar:
+                                    LENT_WORKERS[wid] = master_solicitante_id
+                                    req_id_redir = gerar_request_id()
+                                    PENDING_WORKER_COMMANDS[wid] = {
+                                        "type":       "command_redirect",
+                                        "request_id": req_id_redir,
+                                        "payload":    {"new_master_address": master_solicitante_address}
                                     }
                                     config.logger.info(
-                                        f"[P2P][SEND] type=response_rejected | request_id={request_id} | "
-                                        f"Recusamos o pedido de {master_solicitante_id}. Motivo: {reason}"
+                                        f"[P2P][SEND] type=command_redirect | request_id={req_id_redir} | "
+                                        f"Enfileirado para Worker {wid}"
                                     )
-                                    conn.sendall((json.dumps(resposta) + config.DELIMITER).encode())
-                                else:
-                                    workers_a_emprestar = workers_disponiveis[:min(workers_needed, len(workers_disponiveis))]
-
-                                    master_solicitante_address = None
-                                    for neighbor in config.NEIGHBORS:
-                                        if neighbor.get("id") == master_solicitante_id:
-                                            master_solicitante_address = f"{neighbor['host']}:{neighbor['port']}"
-                                            break
-                                    if not master_solicitante_address:
-                                        master_solicitante_address = f"{addr[0]}:{config.PORT}"
-
-                                    resposta = {
-                                        "type":       "response_accepted",
-                                        "request_id": request_id,
-                                        "payload": {
-                                            "workers_offered": len(workers_a_emprestar),
-                                            "worker_details": [
-                                                {"id": wid, "address": f"{config.HOST}:{config.PORT}"}
-                                                for wid in workers_a_emprestar
-                                            ]
-                                        }
-                                    }
-                                    config.logger.info(
-                                        f"[P2P][SEND] type=response_accepted | request_id={request_id} | "
-                                        f"Emprestando {workers_a_emprestar}"
-                                    )
-                                    conn.sendall((json.dumps(resposta) + config.DELIMITER).encode())
-
-                                    for wid in workers_a_emprestar:
-                                        LENT_WORKERS[wid] = master_solicitante_id
-                                        req_id_redir = gerar_request_id()
-                                        PENDING_WORKER_COMMANDS[wid] = {
-                                            "type":       "command_redirect",
-                                            "request_id": req_id_redir,
-                                            "payload":    {"new_master_address": master_solicitante_address}
-                                        }
-                                        config.logger.info(
-                                            f"[P2P][SEND] type=command_redirect | request_id={req_id_redir} | "
-                                            f"Enfileirado para Worker {wid}"
-                                        )
-                                    log_estado_workers()
+                                log_estado_workers()
                             continue
 
-                        # --------------------------------------------------
-                        # 2. register_temporary_worker
-                        # --------------------------------------------------
                         if msg.get("type") == "register_temporary_worker":
                             payload = msg.get("payload", {})
                             if not validar_campos_obrigatorios(payload, CAMPOS_OBRIGATORIOS["register_temporary_worker"], "register_temporary_worker"):
@@ -361,9 +321,6 @@ def handle_client(conn, addr):
                             keep_open = True
                             continue
 
-                        # --------------------------------------------------
-                        # 3. notify_worker_returned
-                        # --------------------------------------------------
                         if msg.get("type") == "notify_worker_returned":
                             payload = msg.get("payload", {})
                             if not validar_campos_obrigatorios(payload, CAMPOS_OBRIGATORIOS["notify_worker_returned"], "notify_worker_returned"):
@@ -378,9 +335,6 @@ def handle_client(conn, addr):
                             )
                             continue
 
-                        # --------------------------------------------------
-                        # 4. Mensagens padrão de Worker (Sprint 01 / 02)
-                        # --------------------------------------------------
                         if "WORKER" in msg:
                             if not validar_campos_obrigatorios(msg, ["WORKER", "WORKER_UUID"], "worker_alive"):
                                 continue
@@ -400,7 +354,6 @@ def handle_client(conn, addr):
                                 f"(origem: {msg['SERVER_UUID']}) se reportou."
                             )
 
-                        # Verifica comando pendente antes de distribuir tarefa
                         if msg.get("WORKER") == "ALIVE":
                             command = None
                             with _lock:
@@ -418,7 +371,6 @@ def handle_client(conn, addr):
                         if is_borrowed and msg.get("WORKER") == "ALIVE":
                             BORROWED_WORKER_TASKS[worker_id] = BORROWED_WORKER_TASKS.get(worker_id, 0) + 1
 
-                        # Sprint 4 - Contabiliza tarefas concluídas / falhas
                         if msg.get("STATUS") in ("OK", "NOK"):
                             with _tasks_lock:
                                 if msg["STATUS"] == "OK":
@@ -439,11 +391,6 @@ def handle_client(conn, addr):
 
         except Exception as e:
             config.logger.error(f"[Master] Erro no handler do cliente {addr}: {e}")
-
-
-# =====================================================================
-# Notificação de devolução de worker ao Master de origem
-# =====================================================================
 
 def enviar_notify_worker_returned(original_master_address, worker_id):
     try:
@@ -466,11 +413,6 @@ def enviar_notify_worker_returned(original_master_address, worker_id):
             )
     except Exception as e:
         config.logger.error(f"[P2P] Falha ao enviar notify_worker_returned para {original_master_address}: {e}")
-
-
-# =====================================================================
-# Solicitação de ajuda a Masters vizinhos
-# =====================================================================
 
 def solicitar_ajuda_vizinhos(workers_needed):
     for neighbor in config.NEIGHBORS:
@@ -518,7 +460,7 @@ def solicitar_ajuda_vizinhos(workers_needed):
                             for worker in details:
                                 wid = worker["id"]
                                 BORROWED_WORKERS[wid] = f"{neighbor['host']}:{neighbor['port']}"
-                            log_estado_workers()
+                        log_estado_workers()
                         workers_needed -= offered
                     elif resposta and resposta.get("type") == "response_rejected":
                         config.logger.info(
@@ -527,11 +469,6 @@ def solicitar_ajuda_vizinhos(workers_needed):
                         )
         except Exception:
             config.logger.error(f"[P2P] Falha ao contatar vizinho {neighbor['id']}: Timeout/Offline")
-
-
-# =====================================================================
-# Monitor de carga (saturação e devolução de workers)
-# =====================================================================
 
 def monitor_carga():
     while True:
@@ -581,11 +518,6 @@ def monitor_carga():
                         log_estado_workers()
                     enviar_notify_worker_returned(original_master, wid)
 
-
-# =====================================================================
-# Gerador de tarefas (simulação de carga)
-# =====================================================================
-
 def gerador_tarefas():
     if os.environ.get("P2P_DISABLE_GENERATOR") == "true":
         config.logger.info("[Gerador] Desabilitado via variável de ambiente.")
@@ -608,15 +540,10 @@ def gerador_tarefas():
                         f"Fila total: {len(processor.FILA_TAREFAS)}"
                     )
 
-
-# =====================================================================
-# Inicialização
-# =====================================================================
-
 def start_master():
-    threading.Thread(target=monitor_carga,              daemon=True).start()
+    threading.Thread(target=monitor_carga,            daemon=True).start()
     threading.Thread(target=gerador_tarefas,            daemon=True).start()
-    threading.Thread(target=enviar_metricas_supervisor, daemon=True).start()  # Sprint 4
+    threading.Thread(target=enviar_metricas_supervisor, daemon=True).start()  
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -633,7 +560,6 @@ def start_master():
             config.logger.info(f"[Master] Encerrando servidor...")
             config.logger.info(f"[Master] OFFLINE.")
             sys.exit(0)
-
 
 if __name__ == "__main__":
     start_master()
