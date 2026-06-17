@@ -3,7 +3,7 @@ import json
 
 
 MEU_IP_NA_REDE = '127.0.0.1'
-MINHA_PORTA = 54321
+MINHA_PORTA = 8000
 
 
 MEUS_VIZINHOS_FIXOS = [
@@ -17,7 +17,7 @@ DELIMITER = '\n'
 HEARTBEAT_INTERVAL = int(os.environ.get("P2P_HEARTBEAT_INTERVAL", 5))
 
 
-SERVER_UUID = os.environ.get("P2P_SERVER_UUID", "Master_5.A")
+SERVER_UUID = os.environ.get("P2P_SERVER_UUID", "Master_5.A.local")
 WORKER_UUID = os.environ.get("P2P_WORKER_UUID", "Worker_Local")
 
 CAPACITY = 10

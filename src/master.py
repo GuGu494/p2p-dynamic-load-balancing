@@ -24,8 +24,8 @@ _tasks_lock = threading.Lock()
 _start_time = time.time()
 _lock = threading.Lock()
 
-SUPERVISOR_HOST = "nuted-ia.dev"
-SUPERVISOR_PORT = 443
+SUPERVISOR_HOST = os.environ.get("SUPERVISOR_HOST", "nuted-ia.dev")
+SUPERVISOR_PORT = int(os.environ.get("SUPERVISOR_PORT", 443))
 SUPERVISOR_INTERVAL = 10  
 
 def log_estado_workers():
@@ -78,12 +78,20 @@ def construir_payload_metricas():
         workers_borrowed_in  = len(BORROWED_WORKERS) 
         workers_home         = workers_total - workers_borrowed_in
 
+        in_borrowed = []
+        for addr in BORROWED_WORKERS.values():
+            # Tenta encontrar o UUID correspondente na lista de vizinhos
+            peer_uuid = addr.split(":")[0] # Fallback para o IP
+            for n in config.NEIGHBORS:
+                if f"{n['host']}:{n['port']}" == addr:
+                    peer_uuid = n['id']
+                    break
+            in_borrowed.append({"direction": "in", "peer_uuid": peer_uuid})
+
         borrowed_list = (
             [{"direction": "out", "peer_uuid": peer_id}
              for peer_id in LENT_WORKERS.values()]
-            +
-            [{"direction": "in",  "peer_uuid": addr.split(":")[0]}
-             for addr in BORROWED_WORKERS.values()]
+            + in_borrowed
         )
 
         neighbors_status = [
@@ -115,7 +123,7 @@ def construir_payload_metricas():
         "task":            "performance_report",
         "timestamp":       now_iso,
         "message_id":      gerar_request_id(),
-        "payload_version": "sprint4-monitor",
+        "payload_version": "sprint4-monitor-v2",
         "performance": {
             "system": {
                 "uptime_seconds":   uptime_seconds,
