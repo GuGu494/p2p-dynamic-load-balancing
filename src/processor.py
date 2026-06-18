@@ -8,7 +8,7 @@ import config
 if os.environ.get("P2P_EMPTY_TASKS") == "true":
     FILA_TAREFAS = []
 else:
-    num_tasks = int(os.environ.get("P2P_NUM_TASKS", 30))
+    num_tasks = int(os.environ.get("P2P_NUM_TASKS", 10))
     FILA_TAREFAS = ([
         "Compilar_Kernel", "Processar_Pagamentos", "Otimizar_Rotas",
         "Analisar_Vulnerabilidades", "Treinar_Rede_Neural", "Sincronizar_Bancos"

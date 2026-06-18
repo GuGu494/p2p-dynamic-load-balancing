@@ -17,7 +17,7 @@ DELIMITER = '\n'
 HEARTBEAT_INTERVAL = int(os.environ.get("P2P_HEARTBEAT_INTERVAL", 5))
 
 
-SERVER_UUID = os.environ.get("P2P_SERVER_UUID", "Master_5.A.local")
+SERVER_UUID = os.environ.get("P2P_SERVER_UUID", "Master_5.A")
 WORKER_UUID = os.environ.get("P2P_WORKER_UUID", "Worker_Local")
 
 CAPACITY = 10

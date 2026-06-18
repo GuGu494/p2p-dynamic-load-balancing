@@ -26,7 +26,7 @@ _lock = threading.Lock()
 
 SUPERVISOR_HOST = os.environ.get("SUPERVISOR_HOST", "nuted-ia.dev")
 SUPERVISOR_PORT = int(os.environ.get("SUPERVISOR_PORT", 443))
-SUPERVISOR_INTERVAL = 10  
+SUPERVISOR_INTERVAL = int(os.environ.get("SUPERVISOR_INTERVAL", 10))
 
 def log_estado_workers():
     locais = [w for w in WORKERS_ATIVOS if w not in BORROWED_WORKERS and w not in LENT_WORKERS]
@@ -80,8 +80,7 @@ def construir_payload_metricas():
 
         in_borrowed = []
         for addr in BORROWED_WORKERS.values():
-            # Tenta encontrar o UUID correspondente na lista de vizinhos
-            peer_uuid = addr.split(":")[0] # Fallback para o IP
+            peer_uuid = addr.split(":")[0] 
             for n in config.NEIGHBORS:
                 if f"{n['host']}:{n['port']}" == addr:
                     peer_uuid = n['id']
@@ -187,15 +186,22 @@ def enviar_metricas_supervisor():
     config.logger.info(f"[Sprint4] Thread de métricas iniciada. Enviando a cada {SUPERVISOR_INTERVAL}s para {SUPERVISOR_HOST}:{SUPERVISOR_PORT}")
 
     while True:
-        time.sleep(SUPERVISOR_INTERVAL)
+        loop_start = time.time()
         try:
             payload = construir_payload_metricas()
             dados   = (json.dumps(payload) + "\n").encode("utf-8")
 
-            context = ssl.create_default_context()
-            with socket.create_connection((SUPERVISOR_HOST, SUPERVISOR_PORT), timeout=8) as raw_sock:
-                with context.wrap_socket(raw_sock, server_hostname=SUPERVISOR_HOST) as tls_sock:
-                    tls_sock.sendall(dados)
+            # Se for a porta 443, a documentação exige TLS
+            if SUPERVISOR_PORT == 443:
+                context = ssl.create_default_context()
+                with socket.create_connection((SUPERVISOR_HOST, SUPERVISOR_PORT), timeout=8) as raw_sock:
+                    with context.wrap_socket(raw_sock, server_hostname=SUPERVISOR_HOST) as tls_sock:
+                        tls_sock.sendall(dados)
+            else:
+                # Se for a porta 8000 (SIMULAÇÃO DE APRESENTAÇÃO - Pag 17), usa TCP puro sem TLS
+                with socket.create_connection((SUPERVISOR_HOST, SUPERVISOR_PORT), timeout=8) as raw_sock:
+                    raw_sock.sendall(dados)
+                    # Não há tls_sock.recv() conforme regra na pag 23
 
             config.logger.info(
                 f"[Sprint4] Métricas enviadas | tasks_pending={payload['performance']['farm_state']['tasks']['tasks_pending']} | "
@@ -208,9 +214,14 @@ def enviar_metricas_supervisor():
         except socket.timeout:
             config.logger.warning(f"[Sprint4] Timeout ao conectar no supervisor ({SUPERVISOR_HOST}:{SUPERVISOR_PORT})")
         except ConnectionRefusedError:
-            config.logger.warning(f"[Sprint4] Supervisor recusou conexão. Tentará novamente em {SUPERVISOR_INTERVAL}s")
+            config.logger.warning(f"[Sprint4] Supervisor recusou conexão. Tentará novamente no próximo ciclo.")
         except Exception as e:
             config.logger.warning(f"[Sprint4] Falha ao enviar métricas: {e}")
+        
+        # Garante exatos 10s de diferença entre as chamadas, deduzindo o tempo que a rede demorou
+        elapsed = time.time() - loop_start
+        sleep_time = max(0, SUPERVISOR_INTERVAL - elapsed)
+        time.sleep(sleep_time)
 
 def handle_client(conn, addr):
     with conn:
@@ -557,13 +568,17 @@ def start_master():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(('0.0.0.0', config.PORT))
         s.listen()
+        s.settimeout(1.0)  # Evita que o accept bloqueie o Ctrl+C no Windows
         config.logger.info(f"=== Master Server na porta {config.PORT} (Limite: {config.SATURATION_THRESHOLD}) ===")
         config.logger.info(f"[Master] OK - ONLINE | Aguardando conexões em 0.0.0.0:{config.PORT}")
         config.logger.info(f"[Master] Pressione Ctrl+C para encerrar.")
         try:
             while True:
-                conn, addr = s.accept()
-                threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+                try:
+                    conn, addr = s.accept()
+                    threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
+                except socket.timeout:
+                    pass
         except KeyboardInterrupt:
             config.logger.info(f"[Master] Encerrando servidor...")
             config.logger.info(f"[Master] OFFLINE.")
