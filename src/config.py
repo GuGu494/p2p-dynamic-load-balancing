@@ -7,7 +7,7 @@ MINHA_PORTA = 8000
 
 
 MEUS_VIZINHOS_FIXOS = [
-    #{"id": "Grupo_B_Teste", "host": "127.0.0.1", "port": 54322}
+    {"id": "Grupo_B_Teste", "host": "127.0.0.1", "port": 8000}
 ]
 
 
